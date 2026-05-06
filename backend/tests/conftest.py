@@ -1,0 +1,11 @@
+from httpx import ASGITransport, AsyncClient
+import pytest
+
+from app.main import app
+
+
+@pytest.fixture
+async def client():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
+        yield async_client
