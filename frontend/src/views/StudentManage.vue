@@ -3,14 +3,14 @@
     <el-card>
       <template #header>
         <div class="header-row">
-          <span>学生管理</span>
-          <div class="actions">
+          <span>{{ isTeacher ? '学生管理' : '我的信息' }}</span>
+          <div v-if="isTeacher" class="actions">
             <el-button type="primary" @click="openCreate">新增学生</el-button>
           </div>
         </div>
       </template>
 
-      <el-form inline>
+      <el-form v-if="isTeacher" inline>
         <el-form-item label="批量导入 CSV">
           <el-upload :show-file-list="false" :http-request="uploadBatch">
             <el-button>上传 CSV</el-button>
@@ -26,13 +26,13 @@
         <el-table-column prop="name" label="姓名" />
         <el-table-column prop="class_name" label="班级" />
         <el-table-column prop="face_image_path" label="人脸图片路径" min-width="220" />
-        <el-table-column label="操作" width="320">
+        <el-table-column label="操作" :width="isTeacher ? 320 : 150">
           <template #default="scope">
-            <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+            <el-button v-if="isTeacher" size="small" @click="openEdit(scope.row)">编辑</el-button>
             <el-upload :show-file-list="false" :http-request="(options) => uploadFace(scope.row, options)">
               <el-button size="small" type="primary" plain>上传人脸</el-button>
             </el-upload>
-            <el-button size="small" type="danger" @click="removeStudent(scope.row)">删除</el-button>
+            <el-button v-if="isTeacher" size="small" type="danger" @click="removeStudent(scope.row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -53,11 +53,14 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import request from '../api/request'
+import { useAuthStore } from '../stores/auth'
 
+const authStore = useAuthStore()
+const isTeacher = computed(() => authStore.user?.role === 'teacher')
 const loading = ref(false)
 const dialogVisible = ref(false)
 const dialogMode = ref('create')

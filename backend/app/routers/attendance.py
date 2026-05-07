@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timezone
 from io import BytesIO
 
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import Attendance, Student, User
-from app.services.emotion_service import analyze_emotion
+from app.services.emotion_service import analyze_image_emotion
 from app.services.face_service import match_student
 from app.services.liveness_service import get_liveness_placeholder
 
@@ -18,6 +19,15 @@ router = APIRouter()
 
 def success(data: dict | list, message: str = "success") -> dict:
     return {"code": 200, "message": message, "data": data}
+
+
+def accessible_students_query(db: Session, user: User):
+    query = db.query(Student)
+    if user.role != "teacher":
+        if user.student_id is None:
+            raise HTTPException(status_code=403, detail="学生账号未绑定学生信息")
+        query = query.filter(Student.student_id == user.student_id)
+    return query
 
 
 @router.get("/action-challenge")
@@ -31,12 +41,18 @@ def attendance_check(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    students = db.query(Student).all()
+    students = accessible_students_query(db, user).all()
     if not students:
         raise HTTPException(status_code=400, detail="当前没有学生数据，无法完成考勤")
 
-    matched_student, confidence = match_student(students, file.filename or str(datetime.now(timezone.utc).timestamp()))
-    emotion = analyze_emotion((file.filename or "attendance") + str(matched_student.student_id if matched_student else 0))
+    image_bytes = file.file.read()
+    image_identifier = hashlib.sha256(image_bytes).hexdigest() if image_bytes else file.filename or str(datetime.now(timezone.utc).timestamp())
+    matched_student, confidence = match_student(students, image_identifier)
+    emotion_prediction = analyze_image_emotion(
+        image_bytes,
+        fallback_seed=(file.filename or "attendance") + str(matched_student.student_id if matched_student else 0),
+    )
+    emotion = emotion_prediction.emotion
     check_time = datetime.now(timezone.utc)
     live_result = get_liveness_placeholder()
 
@@ -64,6 +80,8 @@ def attendance_check(
         "check_time": check_time,
         "status": "success",
         "emotion": emotion,
+        "emotion_confidence": emotion_prediction.confidence,
+        "emotion_source": emotion_prediction.source,
         "confidence": confidence,
         "live_result": live_result,
     })
@@ -77,6 +95,10 @@ def attendance_records(
     user: User = Depends(get_current_user),
 ):
     query = db.query(Attendance, Student).join(Student, Attendance.student_id == Student.student_id)
+    if user.role != "teacher":
+        if user.student_id is None:
+            return success([])
+        query = query.filter(Attendance.student_id == user.student_id)
     if student_no:
         query = query.filter(Student.student_no.contains(student_no))
     if name:
@@ -103,12 +125,15 @@ def attendance_records(
 
 @router.get("/export")
 def export_attendance(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rows = (
-        db.query(Attendance, Student)
-        .join(Student, Attendance.student_id == Student.student_id)
-        .order_by(Attendance.record_id.asc())
-        .all()
-    )
+    query = db.query(Attendance, Student).join(Student, Attendance.student_id == Student.student_id)
+    if user.role != "teacher":
+        if user.student_id is None:
+            rows = []
+        else:
+            query = query.filter(Attendance.student_id == user.student_id)
+            rows = query.order_by(Attendance.record_id.asc()).all()
+    else:
+        rows = query.order_by(Attendance.record_id.asc()).all()
 
     workbook = Workbook()
     sheet = workbook.active

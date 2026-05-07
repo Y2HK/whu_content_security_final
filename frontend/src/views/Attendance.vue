@@ -6,7 +6,7 @@
           <span>基础考勤</span>
           <div class="actions">
             <el-button @click="triggerFileSelect">选择图片考勤</el-button>
-            <el-button type="success" @click="exportRecords">导出 Excel</el-button>
+            <el-button v-if="isTeacher" type="success" @click="exportRecords">导出 Excel</el-button>
           </div>
         </div>
       </template>
@@ -46,7 +46,7 @@
 
     <el-card>
       <template #header>考勤记录</template>
-      <el-form inline>
+      <el-form v-if="isTeacher" inline>
         <el-form-item label="学号">
           <el-input v-model="filters.student_no" placeholder="按学号筛选" clearable />
         </el-form-item>
@@ -78,7 +78,10 @@ import { ElMessage } from 'element-plus'
 import request from '../api/request'
 import CameraCapture from '../components/CameraCapture.vue'
 import FaceMeshDetector from '../components/FaceMeshDetector.vue'
+import { useAuthStore } from '../stores/auth'
 
+const authStore = useAuthStore()
+const isTeacher = computed(() => authStore.user?.role === 'teacher')
 const loading = ref(false)
 const records = ref([])
 const latestResult = ref(null)
