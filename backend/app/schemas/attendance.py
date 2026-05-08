@@ -10,6 +10,8 @@ class AttendanceCheckResponse(BaseModel):
     check_time: datetime
     status: str
     emotion: str | None
+    emotion_confidence: float | None = None
+    emotion_source: str | None = None
     confidence: float
     live_result: dict
 

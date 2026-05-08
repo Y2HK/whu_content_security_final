@@ -9,6 +9,8 @@ class GroupParticipantResponse(BaseModel):
     name: str
     confidence: float
     emotion: str | None
+    emotion_confidence: float | None = None
+    emotion_source: str | None = None
 
 
 class GroupUploadResponse(BaseModel):

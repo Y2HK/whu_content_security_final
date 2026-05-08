@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_teacher
 from app.db.database import get_db
 from app.db.models import FaceFeature, Student, User
 from app.schemas.student import StudentCreate, StudentUpdate
@@ -21,24 +21,31 @@ def success(data: dict | list, message: str = "success") -> dict:
     return {"code": 200, "message": message, "data": data}
 
 
+def serialize_student(item: Student) -> dict:
+    return {
+        "student_id": item.student_id,
+        "student_no": item.student_no,
+        "name": item.name,
+        "class_name": item.class_name,
+        "face_image_path": item.face_image_path,
+        "created_at": item.created_at,
+    }
+
+
 @router.get("")
 def list_students(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    students = db.query(Student).order_by(Student.student_id.desc()).all()
-    return success([
-        {
-            "student_id": item.student_id,
-            "student_no": item.student_no,
-            "name": item.name,
-            "class_name": item.class_name,
-            "face_image_path": item.face_image_path,
-            "created_at": item.created_at,
-        }
-        for item in students
-    ])
+    query = db.query(Student)
+    if user.role != "teacher":
+        if user.student_id is None:
+            return success([])
+        query = query.filter(Student.student_id == user.student_id)
+
+    students = query.order_by(Student.student_id.desc()).all()
+    return success([serialize_student(item) for item in students])
 
 
 @router.post("")
-def create_student(payload: StudentCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def create_student(payload: StudentCreate, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
     exists = db.query(Student).filter(Student.student_no == payload.student_no).first()
     if exists:
         raise HTTPException(status_code=400, detail="学号已存在")
@@ -47,18 +54,11 @@ def create_student(payload: StudentCreate, db: Session = Depends(get_db), user: 
     db.add(student)
     db.commit()
     db.refresh(student)
-    return success({
-        "student_id": student.student_id,
-        "student_no": student.student_no,
-        "name": student.name,
-        "class_name": student.class_name,
-        "face_image_path": student.face_image_path,
-        "created_at": student.created_at,
-    })
+    return success(serialize_student(student))
 
 
 @router.put("/{student_id}")
-def update_student(student_id: int, payload: StudentUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def update_student(student_id: int, payload: StudentUpdate, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
     student = db.query(Student).filter(Student.student_id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="学生不存在")
@@ -72,18 +72,11 @@ def update_student(student_id: int, payload: StudentUpdate, db: Session = Depend
     student.class_name = payload.class_name
     db.commit()
     db.refresh(student)
-    return success({
-        "student_id": student.student_id,
-        "student_no": student.student_no,
-        "name": student.name,
-        "class_name": student.class_name,
-        "face_image_path": student.face_image_path,
-        "created_at": student.created_at,
-    })
+    return success(serialize_student(student))
 
 
 @router.delete("/{student_id}")
-def delete_student(student_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def delete_student(student_id: int, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
     student = db.query(Student).filter(Student.student_id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="学生不存在")
@@ -104,6 +97,8 @@ async def upload_student_face(
     student = db.query(Student).filter(Student.student_id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="学生不存在")
+    if user.role != "teacher" and user.student_id != student_id:
+        raise HTTPException(status_code=403, detail="只能上传自己的学生人脸")
 
     suffix = Path(file.filename or "face.jpg").suffix or ".jpg"
     destination = settings.UPLOAD_DIR / "students" / f"student_{student_id}{suffix}"
@@ -126,7 +121,7 @@ async def upload_student_face(
 async def batch_import_students(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_teacher),
 ):
     temp_path = settings.UPLOAD_DIR / "imports" / (file.filename or "students.csv")
     await save_upload_file(file, temp_path)

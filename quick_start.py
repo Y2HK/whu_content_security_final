@@ -10,6 +10,12 @@ BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 
 
+def run_command(command: list[str], cwd: Path) -> None:
+    result = subprocess.run(command, cwd=str(cwd), check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
 def resolve_npm_command() -> list[str]:
     npm_cmd = shutil.which("npm.cmd")
     if npm_cmd:
@@ -24,12 +30,28 @@ def resolve_npm_command() -> list[str]:
     )
 
 
-def main() -> None:
+def ensure_backend_python() -> Path:
     backend_python = BACKEND / "venv" / "Scripts" / "python.exe"
-    frontend_node_modules = FRONTEND / "node_modules"
-
     if not backend_python.exists():
         raise SystemExit("未检测到后端虚拟环境，请先运行 python install_deps.py")
+
+    result = subprocess.run([str(backend_python), "--version"], cwd=str(BACKEND), check=False)
+    if result.returncode == 0:
+        return backend_python
+
+    print("检测到后端虚拟环境解释器失效，正在使用当前 Python 修复 venv ...")
+    run_command([sys.executable, "-m", "venv", "venv"], BACKEND)
+
+    result = subprocess.run([str(backend_python), "--version"], cwd=str(BACKEND), check=False)
+    if result.returncode != 0:
+        raise SystemExit("后端虚拟环境修复失败，请运行 python install_deps.py 重新安装依赖")
+    return backend_python
+
+
+def main() -> None:
+    backend_python = ensure_backend_python()
+    frontend_node_modules = FRONTEND / "node_modules"
+
     if not frontend_node_modules.exists():
         raise SystemExit("未检测到前端依赖，请先运行 python install_deps.py")
 

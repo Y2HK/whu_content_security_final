@@ -2,7 +2,7 @@
   <div class="page-wrap">
     <el-card>
       <template #header>合照识别</template>
-      <el-form :model="form" inline>
+      <el-form v-if="isTeacher" :model="form" inline>
         <el-form-item label="活动名称">
           <el-input v-model="form.activity_name" placeholder="请输入活动名称" />
         </el-form-item>
@@ -14,6 +14,12 @@
           <el-button type="primary" @click="triggerFileSelect">上传合照并识别</el-button>
         </el-form-item>
       </el-form>
+      <el-alert
+        v-else
+        type="info"
+        :closable="false"
+        title="学生账号只能查看自己参与的活动记录。"
+      />
 
       <el-descriptions v-if="latestActivity" title="最近一次识别结果" :column="2" border>
         <el-descriptions-item label="活动名称">{{ latestActivity.activity_name }}</el-descriptions-item>
@@ -47,11 +53,14 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import request from '../api/request'
+import { useAuthStore } from '../stores/auth'
 
+const authStore = useAuthStore()
+const isTeacher = computed(() => authStore.user?.role === 'teacher')
 const loading = ref(false)
 const activities = ref([])
 const latestActivity = ref(null)
