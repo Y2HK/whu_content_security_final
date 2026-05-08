@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     GROUP_FACE_SIMILARITY_THRESHOLD: float = 0.55
     DEFAULT_TEACHER_USERNAME: str = "teacher"
     DEFAULT_TEACHER_PASSWORD: str = "teacher123"
+    ENABLE_LIVENESS: bool = True
+    LIVENESS_THRESHOLD: float = 0.5
+    CUSTOM_MODEL_PATH: Path = MODEL_DIR / "custom_live.pth"
+    CDCN_MODEL_PATH: Path = MODEL_DIR / "cdcn_live.pth"
+    SILENT_FACE_MODEL_PATH: Path = MODEL_DIR / "silent_face"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -1,8 +1,11 @@
 import hashlib
-from datetime import datetime, timezone
+import logging
+import random
+import uuid
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from sqlalchemy.orm import Session
@@ -12,9 +15,36 @@ from app.db.database import get_db
 from app.db.models import Attendance, Student, User
 from app.services.emotion_service import analyze_image_emotion
 from app.services.face_service import match_student
-from app.services.liveness_service import get_liveness_placeholder
+from app.services.liveness_service import liveness_engine
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# 内存缓存：{challenge_id: {"action_type": str, "expires_at": datetime, "used": bool}}
+# 仅适用于 FastAPI 单进程开发服务器
+_challenge_store = {}
+
+
+def _cleanup_expired_challenges():
+    now = datetime.utcnow()
+    expired = [k for k, v in _challenge_store.items() if now > v["expires_at"]]
+    for k in expired:
+        del _challenge_store[k]
+
+
+def _validate_challenge(challenge_id: str | None) -> bool:
+    if not challenge_id:
+        return False
+    _cleanup_expired_challenges()
+    challenge = _challenge_store.get(challenge_id)
+    if not challenge:
+        return False
+    if challenge["used"]:
+        return False
+    if datetime.utcnow() > challenge["expires_at"]:
+        return False
+    challenge["used"] = True
+    return True
 
 
 def success(data: dict | list, message: str = "success") -> dict:
@@ -32,18 +62,47 @@ def accessible_students_query(db: Session, user: User):
 
 @router.get("/action-challenge")
 def action_challenge(user: User = Depends(get_current_user)):
-    return success(get_liveness_placeholder(), message="placeholder")
+    _cleanup_expired_challenges()
+    challenge_id = str(uuid.uuid4())
+    action_type = random.choice(["blink", "open_mouth"])
+    _challenge_store[challenge_id] = {
+        "action_type": action_type,
+        "expires_at": datetime.utcnow() + timedelta(seconds=60),
+        "used": False,
+    }
+    return success({
+        "challenge_id": challenge_id,
+        "action_type": action_type,
+        "description": "请眨眼" if action_type == "blink" else "请张嘴",
+        "timeout_seconds": 10,
+    })
 
 
 @router.post("/check")
 def attendance_check(
     file: UploadFile = File(...),
+    challenge_id: str | None = Form(None),
+    action_verified: bool = Form(False),
+    action_meta: str | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     students = accessible_students_query(db, user).all()
     if not students:
         raise HTTPException(status_code=400, detail="当前没有学生数据，无法完成考勤")
+
+    # 如果提供了 challenge_id，校验其有效性
+    if challenge_id is not None and not _validate_challenge(challenge_id):
+        raise HTTPException(status_code=400, detail="动作验证凭证无效或已过期")
+
+    # 记录前端动作校验日志（仅日志，不存储到数据库）
+    if action_verified or action_meta:
+        logger.info(
+            "attendance_check action info: action_verified=%s action_meta=%s user=%s",
+            action_verified,
+            action_meta,
+            user.username,
+        )
 
     image_bytes = file.file.read()
     image_identifier = hashlib.sha256(image_bytes).hexdigest() if image_bytes else file.filename or str(datetime.now(timezone.utc).timestamp())
@@ -54,7 +113,13 @@ def attendance_check(
     )
     emotion = emotion_prediction.emotion
     check_time = datetime.now(timezone.utc)
-    live_result = get_liveness_placeholder()
+
+    # 纹理活体检测（直接对整图分析）
+    live_result = liveness_engine.predict(image_bytes)
+
+    # 活体检测策略：模型加载成功且判定为假 → 拒绝
+    if live_result["model_loaded"] and not live_result["is_live"]:
+        raise HTTPException(status_code=400, detail="活体检测未通过，请使用真实人脸")
 
     if not matched_student:
         raise HTTPException(status_code=404, detail="未识别到匹配学生")
@@ -63,8 +128,8 @@ def attendance_check(
         student_id=matched_student.student_id,
         check_time=check_time,
         status="success",
-        is_live=False,
-        live_method="reserved",
+        is_live=live_result["is_live"],
+        live_method=live_result["method"],
         emotion=emotion,
         confidence=confidence,
     )
@@ -83,7 +148,12 @@ def attendance_check(
         "emotion_confidence": emotion_prediction.confidence,
         "emotion_source": emotion_prediction.source,
         "confidence": confidence,
-        "live_result": live_result,
+        "live_result": {
+            "is_live": live_result["is_live"],
+            "confidence": live_result["confidence"],
+            "method": live_result["method"],
+            "model_loaded": live_result["model_loaded"],
+        },
     })
 
 
