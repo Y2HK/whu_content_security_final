@@ -9,7 +9,7 @@ from app.core.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import Activity, ActivityParticipant, Student, User
 from app.services.emotion_service import analyze_emotion
-from app.services.face_service import save_upload_file, simulate_group_matches
+from app.services.face_service import recognize_group, save_upload_file
 
 router = APIRouter()
 
@@ -39,7 +39,7 @@ async def upload_group_photo(
     db.commit()
     db.refresh(activity)
 
-    matches = simulate_group_matches(students, activity_name)
+    matches = recognize_group(students, str(destination))
     participants = []
     for student, confidence in matches:
         emotion = analyze_emotion(f"{activity_name}-{student.student_id}")

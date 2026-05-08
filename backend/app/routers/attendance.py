@@ -26,7 +26,7 @@ def action_challenge(user: User = Depends(get_current_user)):
 
 
 @router.post("/check")
-def attendance_check(
+async def attendance_check(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -35,8 +35,9 @@ def attendance_check(
     if not students:
         raise HTTPException(status_code=400, detail="当前没有学生数据，无法完成考勤")
 
-    matched_student, confidence = match_student(students, file.filename or str(datetime.now(timezone.utc).timestamp()))
-    emotion = analyze_emotion((file.filename or "attendance") + str(matched_student.student_id if matched_student else 0))
+    image_bytes = await file.read()
+    matched_student, confidence = match_student(students, image_bytes)
+    emotion = analyze_emotion(str(matched_student.student_id if matched_student else 0))
     check_time = datetime.now(timezone.utc)
     live_result = get_liveness_placeholder()
 

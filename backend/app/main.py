@@ -5,11 +5,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.init_db import init_database
 from app.routers import attendance, auth, emotion, group, students
+from app.services.face_service import load_gallery_from_db
+from app.db.database import SessionLocal
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_database()
+    db = SessionLocal()
+    try:
+        load_gallery_from_db(db)
+    finally:
+        db.close()
     yield
 
 

@@ -1,0 +1,5 @@
+data
+*.doc*
+*.ppt*
+**/__pycache__
+model

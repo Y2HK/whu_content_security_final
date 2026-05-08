@@ -9,8 +9,10 @@ from app.db.database import get_db
 from app.db.models import FaceFeature, Student, User
 from app.schemas.student import StudentCreate, StudentUpdate
 from app.services.face_service import (
+    add_student_to_gallery,
     build_face_feature_from_path,
     parse_students_csv,
+    remove_student_from_gallery,
     save_upload_file,
 )
 
@@ -91,6 +93,7 @@ def delete_student(student_id: int, db: Session = Depends(get_db), user: User = 
     db.query(FaceFeature).filter(FaceFeature.student_id == student_id).delete()
     db.delete(student)
     db.commit()
+    remove_student_from_gallery(student_id)
     return success({"deleted": True, "student_id": student_id})
 
 
@@ -111,9 +114,11 @@ async def upload_student_face(
 
     student.face_image_path = str(destination).replace("\\", "/")
     db.query(FaceFeature).filter(FaceFeature.student_id == student_id).delete()
-    db.add(FaceFeature(student_id=student_id, feature_vector=build_face_feature_from_path(student.face_image_path)))
+    feature_vec = build_face_feature_from_path(student.face_image_path)
+    db.add(FaceFeature(student_id=student_id, feature_vector=feature_vec))
     db.commit()
     db.refresh(student)
+    add_student_to_gallery(student_id, feature_vec)
 
     return success({
         "student_id": student.student_id,

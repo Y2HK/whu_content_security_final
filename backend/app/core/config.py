@@ -3,6 +3,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = BASE_DIR.parent
 
 
 class Settings(BaseSettings):
@@ -11,7 +12,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
     UPLOAD_DIR: Path = BASE_DIR / "uploads"
-    MODEL_DIR: Path = BASE_DIR / "models"
+    MODEL_DIR: Path = PROJECT_ROOT / "model"
     FACE_SIMILARITY_THRESHOLD: float = 0.6
     GROUP_FACE_SIMILARITY_THRESHOLD: float = 0.55
     DEFAULT_TEACHER_USERNAME: str = "teacher"
