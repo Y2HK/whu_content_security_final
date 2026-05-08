@@ -3,3 +3,7 @@ data
 *.ppt*
 **/__pycache__
 model
+**/*.zip
+**/model*
+**/venv
+**/node_modules

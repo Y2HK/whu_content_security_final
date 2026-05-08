@@ -1,7 +1,7 @@
 """
 InsightFace 模型预下载脚本
 
-下载 buffalo_l 模型包到 model/ 目录：
+下载 buffalo_l 模型包到 backend/models/ 目录：
   - det_10g.onnx       SCRFD-10GF 人脸检测
   - 2d106det.onnx      人脸关键点 (106点)
   - w600k_r50.onnx     ArcFace 512维 特征提取
@@ -10,7 +10,7 @@ InsightFace 模型预下载脚本
 
 用法:
   python script/download_models.py
-  python script/download_models.py --root ./model
+  python script/download_models.py --root backend/models
   python script/download_models.py --cpu
 """
 
@@ -97,7 +97,7 @@ def download_models(root: str, use_cpu: bool) -> None:
 
 
 def main() -> None:
-    default_root = PROJECT_ROOT / "model"
+    default_root = BACKEND_ROOT / "models"
 
     parser = argparse.ArgumentParser(description="预下载 InsightFace 人脸识别模型")
     parser.add_argument("--root", type=str, default=str(default_root),

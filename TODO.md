@@ -1,6 +1,6 @@
 # TODO — 未实现功能清单
 
-> 当前状态：业务流程全通，所有 AI 能力均为占位实现（确定性 hash 假匹配）
+> 当前状态：真实人脸检测/识别/合照链路已接入 InsightFace（SCRFD + ArcFace）；`script/face_import.py` 已支持批量导入图片人脸库，`script/run_face_detection.py` 已支持本机摄像头实时调试；情绪分析与活体检测仍为占位实现
 
 ---
 
@@ -14,6 +14,8 @@
 | 4 | `face_service.py:35-46` | ✅ `simulate_group_matches` → `recognize_group` 真实多人脸检测+1:N比对 | InsightFace SCRFD 检测多人脸 → ArcFace 1:N 比对 |
 | 4a | `group.py:42` | ✅ 合照识别的图片路径已传入 `recognize_group` | `str(destination)` 传入，真实读取图像内容 |
 | 4b | 准确率 | ⚠️ 准确率需实测验证 | ArcFace 理论上 ≥95%，需真实数据验证 |
+| 4c | `script/face_import.py` | ✅ 图片人脸库批量导入脚本已实现 | 递归扫描 `data/`，批量写入 `Student` / `FaceFeature` / `uploads/students` |
+| 4d | `script/run_face_detection.py` | ✅ 本机实时调试脚本已实现 | 支持摄像头实时识别和 `--probe` 单图调试，显示人脸框、关键点、学号、分数 |
 | 5 | `emotion_service.py:14-16` | ❌ `analyze_emotion` 用 SHA256 假分类 | 应接入 DeepFace 或真实情绪分类模型 |
 | 6 | `liveness_service.py:1-6` | ❌ 永远返回 `{"implemented": False}` | 应接入 CDCN / Silent-Face 纹理活体检测 |
 | 7 | `attendance.py:50` | ❌ `is_live` 字段恒为 `False` | 活体检测占位导致此字段永远假值 |
@@ -65,7 +67,7 @@
 | 评分项 | 分值 | 状态 | 备注 |
 |--------|------|------|------|
 | 活体检测正常，可抵御照片、视频欺骗 | 10 | ❌ 0 | `liveness_service.py` 占位，完全未实现 |
-| 班级人脸库可批量导入、单个添加/删除/修改 | 2 | ✅ 2 | CRUD 完整，`POST /students/batch` 批量导入 |
+| 班级人脸库可批量导入、单个添加/删除/修改 | 2 | ✅ 2 | 单个接口完整；`POST /students/batch` 批量导入学生基本信息，`script/face_import.py` 批量导入图片人脸库 |
 | 记录考勤数据并支持Excel格式导出 | 1 | ✅ 1 | `openpyxl` 生成 `.xlsx`，`StreamingResponse` 返回 |
 | **后端小计** | **13** | **3** | 活体检测 10 分全丢 |
 
@@ -83,11 +85,11 @@
 
 | 评分项 | 分值 | 状态 | 备注 |
 |--------|------|------|------|
-| 考勤/合照中同步提取面部特征 | 2 | ❌ 0 | 无真实检测，无法提取 |
+| 考勤/合照中同步提取面部特征 | 2 | ⚠️ 1 | 已同步提取关键点与 ArcFace embedding，但情绪模块未使用真实表情特征 |
 | 完成情绪分类 | 3 | ❌ 0 | `SHA256 % 7` 假分类 |
 | 记录完整情绪数据 | 2 | ✅ 2 | `Attendance.emotion` 字段写入 |
 | 前端查看统计结果 | 1 | ✅ 1 | `Statistics.vue` + `EmotionChart.vue` |
-| **情绪小计** | **8** | **3** | |
+| **情绪小计** | **8** | **4** | 真实情绪分类缺失 |
 
 ### 系统安全（18分）
 
@@ -104,7 +106,7 @@
 
 | # | 模块 | 状态 |
 |---|------|------|
-| 19 | 端到端模型管线设计（RetinaFace → ArcFace → 余弦比对） | ✅ `face_pipeline.py` 实现 | InsightFace buffalo_l：SCRFD-10GF + 2d106det + ArcFace w600k_r50 |
+| 19 | 端到端模型管线设计（SCRFD → ArcFace → 余弦比对） | ✅ `face_pipeline.py` 实现 | InsightFace buffalo_l：SCRFD-10GF + 2d106det + ArcFace w600k_r50 |
 | 20 | `script/` 数据增强脚本（albumentations） | ⚠️ 已有 `download_models.py`，缺增强 | 模型下载脚本已创建 |
 | 21 | `build_face_feature_from_path` 写入假特征到 `face_feature` 表 | ✅ 已改为 base64 编码的真实 512 维特征向量 | 启动时自动加载到内存 dict |
 
@@ -118,7 +120,7 @@
 | 前端考勤 (12) | 12 | ~10 | 缺自动捕捉、日期筛选 |
 | 后端考勤 (13) | 13 | ~3 | 活体检测 0 分 |
 | 合照识别 (9) | 9 | ~7 | 准确率需实测验证、前端报表缺折线图 |
-| 情绪分析 (8) | 8 | ~3 | 假分类 |
+| 情绪分析 (8) | 8 | ~4 | 假分类，未接入真实表情特征 |
 | 系统安全 (18) | 18 | 0 | 全部未实现 |
 | 实验报告 (30) | 30 | ~20 | 取决于文档完善度 |
-| **合计** | **100** | **~51** | | |
+| **合计** | **100** | **~52** | | |
