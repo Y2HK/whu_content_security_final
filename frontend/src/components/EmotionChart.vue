@@ -15,6 +15,11 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  chartType: {
+    type: String,
+    default: 'bar',
+    validator: (value) => ['bar', 'line'].includes(value),
+  },
 })
 
 const chartRef = ref(null)
@@ -37,9 +42,12 @@ const renderChart = async () => {
     yAxis: { type: 'value' },
     series: [
       {
-        type: 'bar',
+        type: props.chartType,
+        smooth: props.chartType === 'line',
         data: props.items.map((item) => item.value),
         itemStyle: { color: '#409EFF' },
+        lineStyle: { color: '#409EFF', width: 3 },
+        areaStyle: props.chartType === 'line' ? { opacity: 0.12 } : undefined,
       },
     ],
   })
@@ -47,6 +55,7 @@ const renderChart = async () => {
 
 onMounted(renderChart)
 watch(() => props.items, renderChart, { deep: true })
+watch(() => props.chartType, renderChart)
 
 onBeforeUnmount(() => {
   if (chartInstance) {

@@ -121,6 +121,19 @@
         <el-form-item label="姓名">
           <el-input v-model="filters.name" placeholder="按姓名筛选" clearable />
         </el-form-item>
+        <el-form-item label="日期">
+          <el-date-picker
+            class="date-range-picker"
+            v-model="dateRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="选择日期范围"
+            end-placeholder=""
+            unlink-panels
+            clearable
+          />
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="fetchRecords">查询</el-button>
         </el-form-item>
@@ -160,6 +173,7 @@ const filters = reactive({
   student_no: '',
   name: '',
 })
+const dateRange = ref([])
 
 // 活体检测相关状态
 const challenge = ref(null)
@@ -302,10 +316,24 @@ const handleFileChange = async (event) => {
   }
 }
 
+const buildAttendanceParams = () => {
+  const params = {
+    student_no: filters.student_no,
+    name: filters.name,
+  }
+  if (dateRange.value?.[0]) {
+    params.date_from = dateRange.value[0]
+  }
+  if (dateRange.value?.[1]) {
+    params.date_to = dateRange.value[1]
+  }
+  return params
+}
+
 const fetchRecords = async () => {
   loading.value = true
   try {
-    const { data } = await request.get('/attendance/records', { params: filters })
+    const { data } = await request.get('/attendance/records', { params: buildAttendanceParams() })
     records.value = data.data
   } finally {
     loading.value = false
@@ -314,7 +342,10 @@ const fetchRecords = async () => {
 
 const exportRecords = async () => {
   try {
-    const response = await request.get('/attendance/export', { responseType: 'blob' })
+    const response = await request.get('/attendance/export', {
+      params: buildAttendanceParams(),
+      responseType: 'blob',
+    })
     const blob = new Blob([response.data], { type: response.headers['content-type'] })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -396,5 +427,9 @@ onMounted(() => {
 
 .face-mesh-row {
   margin-bottom: 16px;
+}
+
+.date-range-picker {
+  width: 260px;
 }
 </style>

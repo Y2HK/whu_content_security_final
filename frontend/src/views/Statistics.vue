@@ -16,6 +16,11 @@
     </el-row>
 
     <el-card>
+      <template #header>活动参与趋势折线图</template>
+      <EmotionChart title="活动参与趋势" :items="activityChartData" chart-type="line" />
+    </el-card>
+
+    <el-card>
       <template #header>情绪时间线</template>
       <el-table :data="timeline" v-loading="loading" border>
         <el-table-column prop="student_name" label="姓名" />

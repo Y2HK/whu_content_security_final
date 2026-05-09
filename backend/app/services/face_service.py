@@ -1,10 +1,17 @@
+import base64
 import csv
-import hashlib
-from datetime import datetime
+import logging
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 from fastapi import UploadFile
+
+from app.core.config import settings
+from app.services.face_pipeline import get_pipeline
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_directory(path: Path) -> None:
@@ -18,32 +25,114 @@ async def save_upload_file(upload_file: UploadFile, destination: Path) -> Path:
     return destination
 
 
+def _embedding_to_base64(embedding: np.ndarray) -> str:
+    return base64.b64encode(embedding.astype(np.float32).tobytes()).decode("utf-8")
+
+
+def _base64_to_embedding(feature_vector: str) -> np.ndarray | None:
+    try:
+        embedding = np.frombuffer(base64.b64decode(feature_vector), dtype=np.float32)
+    except Exception:
+        return None
+    if embedding.shape[0] != 512:
+        return None
+    return embedding
+
+
+def _read_image(image_path: str) -> np.ndarray | None:
+    try:
+        image_bytes = np.fromfile(image_path, dtype=np.uint8)
+    except OSError:
+        return None
+    return cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+
+
 def build_face_feature_from_path(image_path: str) -> str:
-    payload = f"{image_path}|{datetime.utcnow().isoformat()}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    image = _read_image(image_path)
+    if image is None:
+        raise ValueError(f"Unable to read image: {image_path}")
+
+    embedding = get_pipeline().extract_embedding(image)
+    if embedding is None:
+        raise ValueError("No face detected in image")
+
+    return _embedding_to_base64(embedding)
 
 
-def match_student(students: list[Any], image_identifier: str) -> tuple[Any | None, float]:
+def match_student(students: list[Any], image_bytes: bytes) -> tuple[Any | None, float]:
     if not students:
         return None, 0.0
 
-    index = int(hashlib.md5(image_identifier.encode("utf-8")).hexdigest(), 16) % len(students)
-    confidence = 0.72 + (index % 20) * 0.01
-    return students[index], min(confidence, 0.95)
+    image_array = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+    if image is None:
+        return None, 0.0
+
+    embedding = get_pipeline().extract_embedding(image)
+    if embedding is None:
+        return None, 0.0
+
+    best_id, confidence = get_pipeline().match_1_to_N(
+        embedding,
+        threshold=settings.FACE_SIMILARITY_THRESHOLD,
+    )
+    if best_id is None:
+        return None, confidence
+
+    matched = next((student for student in students if student.student_id == best_id), None)
+    return matched, confidence
 
 
-def simulate_group_matches(students: list[Any], activity_name: str) -> list[tuple[Any, float]]:
+def recognize_group(students: list[Any], image_path: str) -> list[tuple[Any, float]]:
     if not students:
         return []
 
-    count = min(max(1, len(students) // 2), len(students))
-    base = int(hashlib.sha1(activity_name.encode("utf-8")).hexdigest(), 16)
-    selected = []
-    for offset in range(count):
-        student = students[(base + offset) % len(students)]
-        confidence = 0.7 + ((base + offset) % 20) * 0.01
-        selected.append((student, min(confidence, 0.94)))
-    return selected
+    image = _read_image(image_path)
+    if image is None:
+        return []
+
+    embeddings = get_pipeline().extract_all_embeddings(image)
+    if not embeddings:
+        return []
+
+    student_map = {student.student_id: student for student in students}
+    results: list[tuple[Any, float]] = []
+    seen: set[int] = set()
+
+    for embedding in embeddings:
+        best_id, confidence = get_pipeline().match_1_to_N(
+            embedding,
+            threshold=settings.GROUP_FACE_SIMILARITY_THRESHOLD,
+        )
+        if best_id is not None and best_id in student_map and best_id not in seen:
+            results.append((student_map[best_id], confidence))
+            seen.add(best_id)
+
+    return results
+
+
+def load_gallery_from_db(db: Any) -> int:
+    from app.db.models import FaceFeature
+
+    gallery: dict[int, np.ndarray] = {}
+    for face_feature in db.query(FaceFeature).all():
+        embedding = _base64_to_embedding(face_feature.feature_vector)
+        if embedding is not None:
+            gallery[face_feature.student_id] = embedding
+
+    get_pipeline().load_gallery(gallery)
+    logger.info("Loaded %d face features into memory gallery.", len(gallery))
+    return len(gallery)
+
+
+def add_student_to_gallery(student_id: int, feature_vector: str) -> None:
+    embedding = _base64_to_embedding(feature_vector)
+    if embedding is not None:
+        get_pipeline().add_to_gallery(student_id, embedding)
+
+
+def remove_student_from_gallery(student_id: int) -> None:
+    get_pipeline().remove_from_gallery(student_id)
 
 
 def parse_students_csv(file_path: Path) -> list[dict[str, str]]:

@@ -1,8 +1,7 @@
-import hashlib
 import logging
 import random
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -60,6 +59,29 @@ def accessible_students_query(db: Session, user: User):
     return query
 
 
+def apply_attendance_filters(
+    query,
+    user: User,
+    student_no: str | None = None,
+    name: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    if user.role != "teacher":
+        if user.student_id is None:
+            return None
+        query = query.filter(Attendance.student_id == user.student_id)
+    if student_no:
+        query = query.filter(Student.student_no.contains(student_no))
+    if name:
+        query = query.filter(Student.name.contains(name))
+    if date_from:
+        query = query.filter(Attendance.check_time >= datetime.combine(date_from, time.min))
+    if date_to:
+        query = query.filter(Attendance.check_time <= datetime.combine(date_to, time.max))
+    return query
+
+
 @router.get("/action-challenge")
 def action_challenge(user: User = Depends(get_current_user)):
     _cleanup_expired_challenges()
@@ -105,8 +127,7 @@ def attendance_check(
         )
 
     image_bytes = file.file.read()
-    image_identifier = hashlib.sha256(image_bytes).hexdigest() if image_bytes else file.filename or str(datetime.now(timezone.utc).timestamp())
-    matched_student, confidence = match_student(students, image_identifier)
+    matched_student, confidence = match_student(students, image_bytes)
     emotion_prediction = analyze_image_emotion(
         image_bytes,
         fallback_seed=(file.filename or "attendance") + str(matched_student.student_id if matched_student else 0),
@@ -161,18 +182,15 @@ def attendance_check(
 def attendance_records(
     student_no: str | None = Query(default=None),
     name: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     query = db.query(Attendance, Student).join(Student, Attendance.student_id == Student.student_id)
-    if user.role != "teacher":
-        if user.student_id is None:
-            return success([])
-        query = query.filter(Attendance.student_id == user.student_id)
-    if student_no:
-        query = query.filter(Student.student_no.contains(student_no))
-    if name:
-        query = query.filter(Student.name.contains(name))
+    query = apply_attendance_filters(query, user, student_no, name, date_from, date_to)
+    if query is None:
+        return success([])
 
     rows = query.order_by(Attendance.record_id.desc()).all()
     data = []
@@ -194,16 +212,17 @@ def attendance_records(
 
 
 @router.get("/export")
-def export_attendance(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def export_attendance(
+    student_no: str | None = Query(default=None),
+    name: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Attendance, Student).join(Student, Attendance.student_id == Student.student_id)
-    if user.role != "teacher":
-        if user.student_id is None:
-            rows = []
-        else:
-            query = query.filter(Attendance.student_id == user.student_id)
-            rows = query.order_by(Attendance.record_id.asc()).all()
-    else:
-        rows = query.order_by(Attendance.record_id.asc()).all()
+    query = apply_attendance_filters(query, user, student_no, name, date_from, date_to)
+    rows = [] if query is None else query.order_by(Attendance.record_id.asc()).all()
 
     workbook = Workbook()
     sheet = workbook.active
