@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import random
 import uuid
@@ -105,8 +104,7 @@ def attendance_check(
         )
 
     image_bytes = file.file.read()
-    image_identifier = hashlib.sha256(image_bytes).hexdigest() if image_bytes else file.filename or str(datetime.now(timezone.utc).timestamp())
-    matched_student, confidence = match_student(students, image_identifier)
+    matched_student, confidence = match_student(students, image_bytes)
     emotion_prediction = analyze_image_emotion(
         image_bytes,
         fallback_seed=(file.filename or "attendance") + str(matched_student.student_id if matched_student else 0),
