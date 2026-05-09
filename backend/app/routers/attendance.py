@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import Attendance, Student, User
+from app.core.config import settings
 from app.services.emotion_service import analyze_image_emotion
 from app.services.face_service import match_student
 from app.services.liveness_service import liveness_engine
@@ -82,20 +83,28 @@ def apply_attendance_filters(
     return query
 
 
+ACTIONS = ["blink", "open_mouth"]
+
+
 @router.get("/action-challenge")
 def action_challenge(user: User = Depends(get_current_user)):
     _cleanup_expired_challenges()
     challenge_id = str(uuid.uuid4())
-    action_type = random.choice(["blink", "open_mouth"])
+    actions = random.sample(ACTIONS, k=len(ACTIONS))
+    descriptions = ["请眨眼" if a == "blink" else "请张嘴" for a in actions]
     _challenge_store[challenge_id] = {
-        "action_type": action_type,
+        "actions": actions,
         "expires_at": datetime.utcnow() + timedelta(seconds=60),
         "used": False,
     }
     return success({
         "challenge_id": challenge_id,
-        "action_type": action_type,
-        "description": "请眨眼" if action_type == "blink" else "请张嘴",
+        # 兼容旧前端
+        "action_type": actions[0],
+        "description": descriptions[0],
+        # 新前端（动作序列）
+        "actions": actions,
+        "descriptions": descriptions,
         "timeout_seconds": 10,
     })
 
@@ -127,7 +136,80 @@ def attendance_check(
         )
 
     image_bytes = file.file.read()
-    matched_student, confidence = match_student(students, image_bytes)
+
+    # 解码图像用于人脸检测和活体检测
+    import cv2
+    import numpy as np
+
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="无法解析上传图片")
+
+    # 检测人脸（一次检测，同时用于活体检测和人脸识别）
+    from app.services.face_pipeline import get_pipeline
+
+    logger.info(
+        "[FACE DEBUG] Image shape=%s, dtype=%s, mean=%.1f",
+        img.shape, img.dtype, float(img.mean()),
+    )
+    pipeline = get_pipeline()
+    faces = pipeline.detect_faces(img)
+    logger.info("[FACE DEBUG] detect_faces returned %d faces", len(faces))
+    if not faces:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未检测到人脸。图片尺寸={img.shape[1]}x{img.shape[0]}，请确保人脸清晰可见、正对摄像头。"
+        )
+
+    # 裁剪人脸区域用于活体检测（MiniFASNet 需要 2.7x 扩展的 80x80 人脸区域）
+    bbox = faces[0].bbox.astype(int)
+    h, w = img.shape[:2]
+    fx1, fy1, fx2, fy2 = bbox[0], bbox[1], bbox[2], bbox[3]
+    cx, cy = (fx1 + fx2) / 2, (fy1 + fy2) / 2
+    fw, fh = fx2 - fx1, fy2 - fy1
+    # 2.7x 扩展（与模型训练时一致）
+    scale = 2.7
+    nx1 = int(max(0, cx - fw * scale / 2))
+    ny1 = int(max(0, cy - fh * scale / 2))
+    nx2 = int(min(w, cx + fw * scale / 2))
+    ny2 = int(min(h, cy + fh * scale / 2))
+    face_crop = img[ny1:ny2, nx1:nx2]
+    logger.warning(
+        "[CROP DEBUG] bbox=(%d,%d,%d,%d), crop=(%d,%d,%d,%d), size=%dx%d, "
+        "face_crop_min=%.1f, max=%.1f, mean=%.1f",
+        fx1, fy1, fx2, fy2, nx1, ny1, nx2, ny2,
+        face_crop.shape[1], face_crop.shape[0],
+        float(face_crop.min()), float(face_crop.max()), float(face_crop.mean()),
+    )
+
+    # 纹理活体检测（传入人脸区域）
+    live_result = liveness_engine.predict(face_crop)
+    logger.warning(
+        "[LIVENESS DEBUG] method=%s, model_loaded=%s, is_live=%s, confidence=%.4f, threshold=%.2f",
+        live_result["method"],
+        live_result["model_loaded"],
+        live_result["is_live"],
+        live_result["confidence"],
+        settings.LIVENESS_THRESHOLD,
+    )
+
+    # 人脸识别（复用已检测到的人脸特征）
+    embedding = faces[0].normed_embedding
+    best_id, confidence = pipeline.match_1_to_N(
+        embedding, threshold=settings.FACE_SIMILARITY_THRESHOLD
+    )
+    matched_student = next(
+        (student for student in students if student.student_id == best_id), None
+    )
+    logger.info(
+        "[FACE DEBUG] faces_detected=%d, matched=%s, best_id=%s, confidence=%.4f",
+        len(faces),
+        matched_student.name if matched_student else "None",
+        best_id,
+        confidence,
+    )
+
     emotion_prediction = analyze_image_emotion(
         image_bytes,
         fallback_seed=(file.filename or "attendance") + str(matched_student.student_id if matched_student else 0),
@@ -135,11 +217,13 @@ def attendance_check(
     emotion = emotion_prediction.emotion
     check_time = datetime.now(timezone.utc)
 
-    # 纹理活体检测（直接对整图分析）
-    live_result = liveness_engine.predict(image_bytes)
-
     # 活体检测策略：模型加载成功且判定为假 → 拒绝
     if live_result["model_loaded"] and not live_result["is_live"]:
+        logger.warning(
+            "[LIVENESS REJECTED] confidence=%.4f < threshold=%.2f",
+            live_result["confidence"],
+            settings.LIVENESS_THRESHOLD,
+        )
         raise HTTPException(status_code=400, detail="活体检测未通过，请使用真实人脸")
 
     if not matched_student:

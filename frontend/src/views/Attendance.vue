@@ -44,7 +44,8 @@
         <el-col :span="16">
           <FaceMeshDetector
             ref="faceMeshRef"
-            :action-type="challenge.action_type"
+            :actions="challenge.actions"
+            :descriptions="challenge.descriptions"
             :timeout-seconds="challenge.timeout_seconds"
             @verified="onFaceMeshVerified"
             @progress="onFaceMeshProgress"

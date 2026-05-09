@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Models (large binaries)
+models/*.onnx
+models/*.pth
+models/*.zip
+models/buffalo_l/
+models/deepface/
+
+# Test artifacts
+test_face.jpg
+=0.7.3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend build
+frontend/node_modules/
+frontend/dist/

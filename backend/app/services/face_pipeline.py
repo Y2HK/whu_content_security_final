@@ -61,8 +61,8 @@ class FacePipeline:
             logger.info("人脸引擎使用 CPU 推理")
 
         self._app = FaceAnalysis(name="buffalo_l", root=model_dir, providers=providers)
-        self._app.prepare(ctx_id=ctx_id, det_thresh=0.5, det_size=(640, 640))
-        logger.info("人脸引擎初始化完成")
+        self._app.prepare(ctx_id=ctx_id, det_thresh=0.3, det_size=(640, 640))
+        logger.info("人脸引擎初始化完成 (det_thresh=0.3)")
 
     # ---- 检测 / 特征提取 ----
 

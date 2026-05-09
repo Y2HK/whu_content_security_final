@@ -13,6 +13,12 @@
         class="overlay-canvas"
       />
       <div class="status-badge">{{ stateLabel }}</div>
+      <div v-if="encouragementText" class="encouragement-badge">
+        {{ encouragementText }}
+      </div>
+      <div v-if="isDetecting && actions.length > 1" class="step-badge">
+        动作 {{ currentActionIndex + 1 }} / {{ actions.length }}
+      </div>
     </div>
 
     <div class="controls">
@@ -33,18 +39,19 @@
 
     <div class="progress-area">
       <el-progress
-        :percentage="progressPercent"
+        :percentage="overallProgress"
         :status="progressStatus"
         :stroke-width="16"
       />
       <div class="countdown-text">
-        剩余时间: {{ remainingSeconds.toFixed(1) }}s / {{ timeoutSeconds }}s
+        剩余时间: {{ remainingSeconds.toFixed(1) }}s / 每个动作 {{ timeoutSeconds }}s
       </div>
     </div>
 
     <div class="metrics">
       <el-tag v-if="earValue !== null" type="info">EAR: {{ earValue.toFixed(3) }}</el-tag>
       <el-tag v-if="marValue !== null" type="info">MAR: {{ marValue.toFixed(3) }}</el-tag>
+      <el-tag v-if="marBaseline !== null" type="success">Baseline: {{ marBaseline.toFixed(3) }}</el-tag>
     </div>
 
     <el-alert
@@ -71,10 +78,15 @@ import {
 } from 'vue'
 
 const props = defineProps({
-  actionType: {
-    type: String,
+  actions: {
+    type: Array,
     required: true,
-    validator: (v) => ['blink', 'open_mouth'].includes(v),
+    validator: (v) => Array.isArray(v) && v.length > 0 && v.every(a => ['blink', 'open_mouth'].includes(a)),
+  },
+  descriptions: {
+    type: Array,
+    required: true,
+    validator: (v) => Array.isArray(v) && v.length > 0 && v.every(d => typeof d === 'string'),
   },
   timeoutSeconds: {
     type: Number,
@@ -91,9 +103,12 @@ const captureCanvasRef = ref(null)
 const mediaStream = ref(null)
 // MediaPipe FaceMesh instance (must NOT be reactive ref to avoid Vue Proxy breaking WASM)
 let faceMeshInstance = null
+
 const isDetecting = ref(false)
 const state = ref('IDLE')
+const currentActionIndex = ref(0)
 const errorMessage = ref('')
+const encouragementText = ref('')
 const earValue = ref(null)
 const marValue = ref(null)
 const earHistory = ref([])
@@ -103,7 +118,10 @@ const elapsedMs = ref(0)
 let animationFrameId = null
 let timerIntervalId = null
 let lastTimestamp = 0
-let marBaseline = null  // 闭嘴时的基准 MAR 值
+let marBaseline = null
+let baselineSamples = []
+let prepDeadline = 0
+let actionCompleted = false
 
 // MediaPipe CDN URLs
 const MEDIAPIPE_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh'
@@ -114,40 +132,59 @@ const RIGHT_EYE = [33, 160, 158, 133, 153, 144]
 const MOUTH = [61, 291, 13, 14, 78, 308, 402, 178]
 
 // Thresholds
-// 眨眼：基于绝对 EAR 值（闭眼时 EAR 显著下降，用户数据有效）
 const EAR_CLOSED_THRESHOLD = 0.18
 const EAR_OPEN_THRESHOLD = 0.22
-// 张嘴：基于相对 MAR 变化（不同人脸闭嘴基准不同，不能用绝对阈值）
-const MAR_OPEN_DELTA = 0.15   // 张嘴时 MAR 比 baseline 增加至少 0.15
-const MAR_CLOSED_DELTA = 0.05 // 闭嘴时 MAR 回到 baseline + 0.05 以内
+const MAR_OPEN_DELTA = 0.15
+const MAR_CLOSED_DELTA = 0.05
+
+// TTS
+function speak(text, onEnd) {
+  const hasTTS = 'speechSynthesis' in window
+  if (hasTTS) {
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = 'zh-CN'
+    u.rate = 1.0
+    if (onEnd) u.onend = onEnd
+    speechSynthesis.speak(u)
+  }
+}
 
 // State labels
 const stateLabel = computed(() => {
-  const map = {
-    IDLE: '等待检测',
-    DETECTED: '检测到人脸',
-    IN_PROGRESS: '动作进行中',
-    VERIFIED: '验证通过',
-    FAILED: '验证失败',
+  if (state.value === 'IDLE') return '等待检测'
+  if (state.value === 'PREPARING') return '准备中，请保持自然表情~'
+  if (state.value === 'DETECTED') {
+    const desc = props.descriptions[currentActionIndex.value] || ''
+    return `第${currentActionIndex.value + 1}步：${desc}`
   }
-  return map[state.value] || state.value
+  if (state.value === 'IN_PROGRESS') return '动作进行中，继续保持~'
+  if (state.value === 'TRANSITIONING') return '动作完成，准备下一步~'
+  if (state.value === 'VERIFIED') return '🎉 验证成功！'
+  if (state.value === 'FAILED') return '验证失败'
+  return state.value
 })
 
-// Progress
+// Overall progress (0-100)
+const overallProgress = computed(() => {
+  if (!isDetecting.value) return 0
+  if (state.value === 'VERIFIED') return 100
+  if (state.value === 'FAILED') return 100
+
+  const stepWeight = 100 / props.actions.length
+  if (state.value === 'TRANSITIONING') {
+    return Math.round((currentActionIndex.value + 1) * stepWeight)
+  }
+
+  const actionProgress = Math.min(100, (elapsedMs.value / (props.timeoutSeconds * 1000)) * 100)
+  return Math.round(currentActionIndex.value * stepWeight + (actionProgress / 100) * stepWeight)
+})
+
 const remainingSeconds = computed(() => {
   if (!isDetecting.value || state.value === 'VERIFIED' || state.value === 'FAILED') {
     return props.timeoutSeconds
   }
   const remaining = props.timeoutSeconds - elapsedMs.value / 1000
   return Math.max(0, remaining)
-})
-
-const progressPercent = computed(() => {
-  if (!isDetecting.value || state.value === 'VERIFIED' || state.value === 'FAILED') {
-    return 0
-  }
-  const percent = (elapsedMs.value / (props.timeoutSeconds * 1000)) * 100
-  return Math.min(100, Math.round(percent))
 })
 
 const progressStatus = computed(() => {
@@ -173,7 +210,7 @@ function distance(p1, p2) {
   return Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
 }
 
-// Calculate EAR (Eye Aspect Ratio)
+// Calculate EAR
 function calculateEAR(landmarks, indices) {
   const p1 = landmarks[indices[0]]
   const p2 = landmarks[indices[1]]
@@ -190,7 +227,7 @@ function calculateEAR(landmarks, indices) {
   return (vertical1 + vertical2) / (2 * horizontal)
 }
 
-// Calculate MAR (Mouth Aspect Ratio)
+// Calculate MAR
 function calculateMAR(landmarks, indices) {
   const p49 = landmarks[indices[0]]
   const p55 = landmarks[indices[1]]
@@ -214,7 +251,6 @@ async function initFaceMesh() {
   if (faceMeshInstance) return
 
   try {
-    // Load MediaPipe dependencies from CDN
     await loadScript(`${MEDIAPIPE_CDN}/face_mesh.js`)
     await loadScript(`${MEDIAPIPE_CDN}/face_mesh_solution_simd_wasm_bin.js`)
 
@@ -242,7 +278,7 @@ async function initFaceMesh() {
   }
 }
 
-// Draw face landmarks on overlay canvas
+// Draw face landmarks
 function drawLandmarks(results) {
   const canvas = overlayCanvasRef.value
   const video = videoRef.value
@@ -257,7 +293,6 @@ function drawLandmarks(results) {
 
   const landmarks = results.multiFaceLandmarks[0]
 
-  // Draw face bounding box approximation
   let minX = 1, minY = 1, maxX = 0, maxY = 0
   for (const lm of landmarks) {
     minX = Math.min(minX, lm.x)
@@ -276,7 +311,6 @@ function drawLandmarks(results) {
     (maxY - minY + padding * 2) * canvas.height,
   )
 
-  // Draw key landmarks
   const keyIndices = [...LEFT_EYE, ...RIGHT_EYE, ...MOUTH]
   ctx.fillStyle = '#67c23a'
   for (const idx of keyIndices) {
@@ -293,10 +327,9 @@ function onFaceMeshResults(results) {
 
   drawLandmarks(results)
 
+  if (actionCompleted) return
+
   if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-    if (state.value === 'IDLE') {
-      // No face detected yet
-    }
     emit('progress', { state: state.value })
     return
   }
@@ -310,53 +343,78 @@ function onFaceMeshResults(results) {
 
   earValue.value = avgEAR
   marValue.value = mar
-  earHistory.value.push(avgEAR)
-  marHistory.value.push(mar)
 
-  // DEBUG: print real-time values
-  console.log(
-    `[FaceMesh] action=${props.actionType} state=${state.value} EAR=${avgEAR.toFixed(3)} MAR=${mar.toFixed(3)} | ` +
-    `EAR_th=${EAR_CLOSED_THRESHOLD}/${EAR_OPEN_THRESHOLD} MAR_baseline=${marBaseline?.toFixed(3) ?? 'null'} MAR_delta=${MAR_OPEN_DELTA}/${MAR_CLOSED_DELTA}`
-  )
+  // PREPARING: collect baseline
+  if (state.value === 'PREPARING') {
+    if (avgEAR > 0 && mar > 0) {
+      baselineSamples.push({ mar, ear: avgEAR })
+    }
 
-  // State machine
-  if (state.value === 'IDLE') {
-    state.value = 'DETECTED'
-    emit('progress', { state: state.value, ear: avgEAR, mar })
+    const prepDone = Date.now() >= prepDeadline || baselineSamples.length >= 10
+
+    if (prepDone) {
+      if (baselineSamples.length >= 3) {
+        // 异常值剔除：去掉最高 10% 的样本，取剩余最小值作为闭合 baseline
+        const marValues = baselineSamples.map(s => s.mar).sort((a, b) => a - b)
+        const discardCount = Math.max(0, Math.floor(marValues.length * 0.1))
+        const filtered = marValues.slice(0, marValues.length - discardCount)
+        marBaseline = Math.min(...filtered)
+      } else if (baselineSamples.length > 0) {
+        marBaseline = baselineSamples[0].mar
+      } else {
+        marBaseline = 0.3
+      }
+      startCurrentAction()
+    }
     return
   }
 
+  // DETECTED / IN_PROGRESS
+  const action = props.actions[currentActionIndex.value]
+
   if (state.value === 'DETECTED') {
-    if (props.actionType === 'blink' && avgEAR < EAR_CLOSED_THRESHOLD) {
+    if (action === 'blink' && avgEAR < EAR_CLOSED_THRESHOLD) {
       state.value = 'IN_PROGRESS'
-    } else if (props.actionType === 'open_mouth') {
-      // 收集前3帧建立闭嘴 baseline，然后检测张嘴
-      if (marBaseline === null) {
-        if (marHistory.value.length >= 3) {
-          marBaseline = (marHistory.value[0] + marHistory.value[1] + marHistory.value[2]) / 3
-        }
-      } else if (mar > marBaseline + MAR_OPEN_DELTA) {
-        state.value = 'IN_PROGRESS'
-      }
+    } else if (action === 'open_mouth' && mar > marBaseline * 1.5) {
+      state.value = 'IN_PROGRESS'
     }
-    emit('progress', { state: state.value, ear: avgEAR, mar })
+    emit('progress', { state: state.value, ear: avgEAR, mar, actionIndex: currentActionIndex.value })
     return
   }
 
   if (state.value === 'IN_PROGRESS') {
     let completed = false
-    if (props.actionType === 'blink' && avgEAR > EAR_OPEN_THRESHOLD) {
+    if (action === 'blink' && avgEAR > EAR_OPEN_THRESHOLD) {
       completed = true
-    } else if (props.actionType === 'open_mouth' && mar < marBaseline + MAR_CLOSED_DELTA) {
+    } else if (action === 'open_mouth' && mar < marBaseline * 1.20) {
       completed = true
     }
 
     if (completed) {
-      completeVerification()
+      actionCompleted = true
+      stopTimer()
+      state.value = 'TRANSITIONING'
+      emit('progress', { state: 'TRANSITIONING', actionIndex: currentActionIndex.value })
+      if (currentActionIndex.value < props.actions.length - 1) {
+        // More actions remaining
+        const nextDesc = props.descriptions[currentActionIndex.value + 1]
+        encouragementText.value = `✨ 很好！下一步：${nextDesc}`
+        speak('很好！下一步')
+        setTimeout(() => {
+          currentActionIndex.value++
+          encouragementText.value = ''
+          startCurrentAction()
+        }, 200)
+      } else {
+        // All done
+        encouragementText.value = '🎉 太棒了，验证成功！'
+        speak('太棒了，验证成功！')
+        completeVerification()
+      }
       return
     }
 
-    emit('progress', { state: state.value, ear: avgEAR, mar })
+    emit('progress', { state: state.value, ear: avgEAR, mar, actionIndex: currentActionIndex.value })
   }
 }
 
@@ -389,7 +447,7 @@ async function completeVerification() {
     success: true,
     imageBlob,
     meta: {
-      action_type: props.actionType,
+      actions: [...props.actions],
       duration_ms: durationMs,
       ear_history: [...earHistory.value],
       mar_history: [...marHistory.value],
@@ -402,12 +460,13 @@ function failVerification(reason) {
   state.value = 'FAILED'
   isDetecting.value = false
   stopTimer()
+  encouragementText.value = ''
 
   emit('verified', {
     success: false,
     imageBlob: null,
     meta: {
-      action_type: props.actionType,
+      actions: [...props.actions],
       duration_ms: Date.now() - startTime.value,
       ear_history: [...earHistory.value],
       mar_history: [...marHistory.value],
@@ -444,7 +503,7 @@ async function processVideo() {
     try {
       await faceMeshInstance.send({ image: video })
     } catch (err) {
-      // Ignore processing errors, continue loop
+      // Ignore processing errors
     }
   }
 
@@ -456,19 +515,22 @@ async function startDetection() {
   if (isDetecting.value) return
 
   errorMessage.value = ''
+  encouragementText.value = ''
   state.value = 'IDLE'
+  currentActionIndex.value = 0
   earValue.value = null
   marValue.value = null
   earHistory.value = []
   marHistory.value = []
   elapsedMs.value = 0
   marBaseline = null
+  baselineSamples = []
+  prepDeadline = Date.now() + 2500
+  actionCompleted = false
 
   try {
-    // Initialize MediaPipe
     await initFaceMesh()
 
-    // Get camera stream
     mediaStream.value = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 640 }, height: { ideal: 480 } },
       audio: false,
@@ -479,13 +541,18 @@ async function startDetection() {
       await new Promise((resolve, reject) => {
         videoRef.value.onloadedmetadata = resolve
         videoRef.value.onerror = reject
-        // Timeout fallback
         setTimeout(resolve, 3000)
       })
     }
 
     isDetecting.value = true
-    startTimer()
+    state.value = 'PREPARING'
+
+    const prepText = props.actions.length > 1
+      ? `请准备，我们需要完成${props.actions.length}个小动作来确认是真人哦~请保持自然表情，嘴巴自然闭合~`
+      : '请准备，完成一个小动作来确认是真人哦~请保持自然表情，嘴巴自然闭合~'
+    speak(prepText)
+
     processVideo()
   } catch (err) {
     const msg = err.name === 'NotAllowedError'
@@ -497,18 +564,35 @@ async function startDetection() {
   }
 }
 
+function startCurrentAction() {
+  actionCompleted = false
+  const desc = props.descriptions[currentActionIndex.value]
+  state.value = 'DETECTED'
+
+  stopTimer()
+  elapsedMs.value = 0
+  startTime.value = Date.now()
+  startTimer()
+
+  const stepText = props.actions.length > 1
+    ? `第${currentActionIndex.value + 1}步，${desc}`
+    : desc
+  speak(stepText)
+}
+
 // Stop detection
 function stopDetection() {
   isDetecting.value = false
   stopTimer()
   stopCamera()
+  encouragementText.value = ''
 
   if (animationFrameId) {
     cancelAnimationFrame(animationFrameId)
     animationFrameId = null
   }
 
-  if (state.value === 'IN_PROGRESS' || state.value === 'DETECTED') {
+  if (state.value === 'IN_PROGRESS' || state.value === 'DETECTED' || state.value === 'PREPARING') {
     failVerification('user_cancelled')
   } else {
     state.value = 'IDLE'
@@ -540,11 +624,11 @@ onBeforeUnmount(() => {
 })
 
 // Watch for prop changes
-watch(() => props.actionType, () => {
+watch(() => props.actions, () => {
   if (isDetecting.value) {
     stopDetection()
   }
-})
+}, { deep: true })
 
 // Expose methods
 defineExpose({
@@ -592,6 +676,31 @@ defineExpose({
   padding: 6px 10px;
   border-radius: 999px;
   background: rgba(15, 23, 42, 0.75);
+  color: #fff;
+  font-size: 12px;
+}
+
+.encouragement-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(103, 194, 58, 0.9);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.step-badge {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(64, 158, 255, 0.85);
   color: #fff;
   font-size: 12px;
 }

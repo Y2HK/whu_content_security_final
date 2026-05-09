@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     CUSTOM_MODEL_PATH: Path = MODEL_DIR / "custom_live.pth"
     CDCN_MODEL_PATH: Path = MODEL_DIR / "cdcn_live.pth"
     SILENT_FACE_MODEL_PATH: Path = MODEL_DIR / "silent_face"
+    MINIFASNET_MODEL_PATH: Path = MODEL_DIR / "minifasnet_v2.onnx"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
