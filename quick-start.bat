@@ -24,6 +24,10 @@ if not exist "frontend\node_modules" (
 echo      ✓ 前端依赖存在
 
 echo [3/3] 启动前后端服务...
+backend\venv\Scripts\python.exe script\random_attendance_import.py --min-records 1 --max-records 2 --preview-limit 5
+if errorlevel 1 (
+    echo      [WARN] sample attendance import failed, servers will still start.
+)
 start "Backend Server" cmd /k "cd /d %~dp0backend && call venv\Scripts\activate.bat && python run.py"
 start "Frontend Server" cmd /k "cd /d %~dp0frontend && npm run dev"
 

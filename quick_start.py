@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
+RANDOM_ATTENDANCE_SCRIPT = ROOT / "script" / "random_attendance_import.py"
 
 
 def run_command(command: list[str], cwd: Path) -> None:
@@ -48,6 +49,30 @@ def ensure_backend_python() -> Path:
     return backend_python
 
 
+def import_sample_attendance(backend_python: Path) -> None:
+    if not RANDOM_ATTENDANCE_SCRIPT.exists():
+        print("[WARN] sample attendance script not found, skipped.")
+        return
+
+    print("[INFO] importing sample attendance records ...")
+    result = subprocess.run(
+        [
+            str(backend_python),
+            str(RANDOM_ATTENDANCE_SCRIPT),
+            "--min-records",
+            "1",
+            "--max-records",
+            "2",
+            "--preview-limit",
+            "5",
+        ],
+        cwd=str(ROOT),
+        check=False,
+    )
+    if result.returncode != 0:
+        print("[WARN] sample attendance import failed, servers will still start.")
+
+
 def main() -> None:
     backend_python = ensure_backend_python()
     frontend_node_modules = FRONTEND / "node_modules"
@@ -60,6 +85,8 @@ def main() -> None:
     print("=" * 44)
     print("班级考勤系统 - 一键快速启动脚本")
     print("=" * 44)
+
+    import_sample_attendance(backend_python)
 
     subprocess.Popen(
         [str(backend_python), "run.py"],
