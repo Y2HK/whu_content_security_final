@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.pytest_cache/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Local secrets
+.env
+.env.local
+backend/.env
+frontend/.env.local
+
+# Models (large binaries)
+models/
+backend/models/
+
+# Test artifacts
+test_face.jpg
+=0.7.3
+
+# Runtime uploads and generated/private data
+backend/uploads/
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend build
+node_modules/
+frontend/node_modules/
+frontend/dist/

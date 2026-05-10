@@ -14,6 +14,7 @@ class RegisterRequest(BaseModel):
     password: str
     role: Literal["teacher", "student"]
     student_no: str | None = None
+    teacher_no: str | None = None
 
 
 class TokenResponse(BaseModel):

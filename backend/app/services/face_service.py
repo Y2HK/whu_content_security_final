@@ -1,6 +1,7 @@
 import base64
 import csv
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,14 @@ from app.core.config import settings
 from app.services.face_pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RecognizedFace:
+    student: Any
+    confidence: float
+    bbox: tuple[int, int, int, int]
+    face_crop: np.ndarray
 
 
 def ensure_directory(path: Path) -> None:
@@ -84,6 +93,22 @@ def match_student(students: list[Any], image_bytes: bytes) -> tuple[Any | None, 
 
 
 def recognize_group(students: list[Any], image_path: str) -> list[tuple[Any, float]]:
+    return [(item.student, item.confidence) for item in recognize_group_detailed(students, image_path)]
+
+
+def _crop_bbox(image: np.ndarray, bbox: tuple[int, int, int, int], margin: float = 0.0) -> np.ndarray:
+    x, y, width, height = bbox
+    img_h, img_w = image.shape[:2]
+    pad_x = int(width * margin)
+    pad_y = int(height * margin)
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(img_w, x + width + pad_x)
+    y2 = min(img_h, y + height + pad_y)
+    return image[y1:y2, x1:x2]
+
+
+def recognize_group_detailed(students: list[Any], image_path: str) -> list[RecognizedFace]:
     if not students:
         return []
 
@@ -91,21 +116,28 @@ def recognize_group(students: list[Any], image_path: str) -> list[tuple[Any, flo
     if image is None:
         return []
 
-    embeddings = get_pipeline().extract_all_embeddings(image)
-    if not embeddings:
+    detected_faces = get_pipeline().extract_all_detected_faces(image)
+    if not detected_faces:
         return []
 
     student_map = {student.student_id: student for student in students}
-    results: list[tuple[Any, float]] = []
+    results: list[RecognizedFace] = []
     seen: set[int] = set()
 
-    for embedding in embeddings:
+    for detected_face in detected_faces:
         best_id, confidence = get_pipeline().match_1_to_N(
-            embedding,
+            detected_face.embedding,
             threshold=settings.GROUP_FACE_SIMILARITY_THRESHOLD,
         )
         if best_id is not None and best_id in student_map and best_id not in seen:
-            results.append((student_map[best_id], confidence))
+            results.append(
+                RecognizedFace(
+                    student=student_map[best_id],
+                    confidence=confidence,
+                    bbox=detected_face.bbox,
+                    face_crop=_crop_bbox(image, detected_face.bbox),
+                )
+            )
             seen.add(best_id)
 
     return results

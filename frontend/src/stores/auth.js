@@ -4,7 +4,7 @@ import request from '../api/request'
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
-    token: localStorage.getItem('attendance_token') || '',
+    token: sessionStorage.getItem('attendance_token') || localStorage.getItem('attendance_token') || '',
     user: null,
   }),
   getters: {
@@ -14,14 +14,16 @@ export const useAuthStore = defineStore('auth', {
     async login(payload) {
       const { data } = await request.post('/auth/login', payload)
       this.token = data.data.access_token
-      localStorage.setItem('attendance_token', this.token)
+      sessionStorage.setItem('attendance_token', this.token)
+      localStorage.removeItem('attendance_token')
       await this.fetchCurrentUser()
     },
     async register(payload) {
       const { data } = await request.post('/auth/register', payload)
       this.token = data.data.access_token
       this.user = data.data.user
-      localStorage.setItem('attendance_token', this.token)
+      sessionStorage.setItem('attendance_token', this.token)
+      localStorage.removeItem('attendance_token')
       return this.user
     },
     async fetchCurrentUser() {
@@ -39,6 +41,7 @@ export const useAuthStore = defineStore('auth', {
     clearAuth() {
       this.token = ''
       this.user = null
+      sessionStorage.removeItem('attendance_token')
       localStorage.removeItem('attendance_token')
     },
   },

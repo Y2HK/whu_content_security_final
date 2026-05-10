@@ -10,7 +10,7 @@
           <el-menu-item index="/statistics">统计分析</el-menu-item>
         </el-menu>
       </el-aside>
-      <el-container>
+      <el-container class="content-shell">
         <el-header class="topbar">
           <div>最小可用版本</div>
           <div class="topbar-actions">
@@ -49,11 +49,23 @@ const handleLogout = async () => {
 <style scoped>
 .app-shell {
   min-height: 100vh;
+  width: 100%;
 }
 
 .sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
   background: #0f172a;
   color: #fff;
+  overflow-y: auto;
+}
+
+.content-shell {
+  min-width: 0;
+  margin-left: 220px;
 }
 
 .logo {
@@ -67,6 +79,9 @@ const handleLogout = async () => {
 }
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;

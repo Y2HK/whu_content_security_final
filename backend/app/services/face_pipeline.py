@@ -1,5 +1,6 @@
 import logging
 import threading
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -12,6 +13,12 @@ from app.core.insightface_compat import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DetectedFace:
+    embedding: np.ndarray
+    bbox: tuple[int, int, int, int]
 
 
 class FacePipeline:
@@ -61,8 +68,8 @@ class FacePipeline:
             logger.info("人脸引擎使用 CPU 推理")
 
         self._app = FaceAnalysis(name="buffalo_l", root=model_dir, providers=providers)
-        self._app.prepare(ctx_id=ctx_id, det_thresh=0.5, det_size=(640, 640))
-        logger.info("人脸引擎初始化完成")
+        self._app.prepare(ctx_id=ctx_id, det_thresh=0.3, det_size=(640, 640))
+        logger.info("人脸引擎初始化完成 (det_thresh=0.3)")
 
     # ---- 检测 / 特征提取 ----
 
@@ -86,6 +93,24 @@ class FacePipeline:
         with self._inference_lock:
             faces = self._app.get(img)
         return [f.normed_embedding for f in faces if f.normed_embedding is not None]
+
+    def extract_all_detected_faces(self, img: np.ndarray) -> list[DetectedFace]:
+        self._ensure_model()
+        with self._inference_lock:
+            faces = self._app.get(img)
+
+        detected: list[DetectedFace] = []
+        for face in faces:
+            if face.normed_embedding is None:
+                continue
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            detected.append(
+                DetectedFace(
+                    embedding=face.normed_embedding,
+                    bbox=(x1, y1, max(0, x2 - x1), max(0, y2 - y1)),
+                )
+            )
+        return detected
 
     # ---- 相似度 ----
 

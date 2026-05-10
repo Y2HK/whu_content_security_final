@@ -11,8 +11,35 @@
         </div>
       </template>
 
+      <div v-if="isTeacher" class="session-panel">
+        <template v-if="activeSession">
+          <el-alert
+            type="success"
+            :closable="false"
+            :title="`已发布签到：${activeSession.title}`"
+          />
+          <el-button type="danger" plain :loading="sessionLoading" @click="closeAttendanceSession">
+            结束签到
+          </el-button>
+        </template>
+        <template v-else>
+          <el-input v-model="sessionForm.title" class="session-title-input" placeholder="请输入签到标题" />
+          <el-button type="primary" :loading="sessionLoading" @click="publishAttendanceSession">
+            发布签到
+          </el-button>
+        </template>
+      </div>
+
+      <el-alert
+        v-if="!isTeacher && activeSession"
+        class="mt16"
+        type="success"
+        :closable="false"
+        title="有新的考勤，请使用活体识别完成签到。"
+      />
+
       <!-- 活体检测挑战卡片 -->
-      <el-card v-if="challenge && !showFaceMesh && faceMeshState !== 'verified'" class="challenge-card" shadow="hover">
+      <el-card v-if="canUseLiveness && challenge && !showFaceMesh && faceMeshState !== 'verified'" class="challenge-card" shadow="hover">
         <template #header>
           <div class="challenge-header">
             <el-icon><Lock /></el-icon>
@@ -20,9 +47,6 @@
           </div>
         </template>
         <div class="challenge-body">
-          <div class="challenge-desc">
-            <el-tag size="large" type="warning">{{ challenge.description }}</el-tag>
-          </div>
           <div class="challenge-actions">
             <el-button type="primary" :loading="isVerifying" @click="startFaceMeshVerify">
               开始验证
@@ -40,11 +64,12 @@
       </el-card>
 
       <!-- FaceMeshDetector 动作验证 -->
-      <el-row v-if="showFaceMesh" :gutter="16" class="face-mesh-row">
+      <el-row v-if="showFaceMesh && challenge" :gutter="16" class="face-mesh-row">
         <el-col :span="16">
           <FaceMeshDetector
             ref="faceMeshRef"
-            :action-type="challenge.action_type"
+            :actions="challenge.actions"
+            :descriptions="challenge.descriptions"
             :timeout-seconds="challenge.timeout_seconds"
             @verified="onFaceMeshVerified"
             @progress="onFaceMeshProgress"
@@ -78,12 +103,6 @@
             class="mt16"
             :title="cameraStatusMessage"
             type="info"
-            :closable="false"
-          />
-          <el-alert
-            class="mt16"
-            title="当前版本已接入浏览器摄像头拍照流程；自动抓拍、人脸框与活体判断仅完成交互占位。"
-            type="warning"
             :closable="false"
           />
         </el-col>
@@ -144,6 +163,13 @@
         <el-table-column prop="name" label="姓名" />
         <el-table-column prop="class_name" label="班级" />
         <el-table-column prop="status" label="状态" />
+        <el-table-column label="是否活体" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.is_live ? 'success' : 'info'">
+              {{ row.is_live ? '是' : '否' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="emotion" label="情绪" />
         <el-table-column prop="confidence" label="置信度" />
         <el-table-column prop="check_time" label="考勤时间" min-width="180" />
@@ -153,7 +179,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Lock } from '@element-plus/icons-vue'
 
@@ -164,7 +190,9 @@ import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
 const isTeacher = computed(() => authStore.user?.role === 'teacher')
+const canUseLiveness = computed(() => !isTeacher.value && Boolean(activeSession.value))
 const loading = ref(false)
+const sessionLoading = ref(false)
 const records = ref([])
 const latestResult = ref(null)
 const fileInputRef = ref(null)
@@ -174,6 +202,12 @@ const filters = reactive({
   name: '',
 })
 const dateRange = ref([])
+const activeSession = ref(null)
+const livenessDismissed = ref(false)
+let sessionPollTimer = null
+const sessionForm = reactive({
+  title: '课堂签到',
+})
 
 // 活体检测相关状态
 const challenge = ref(null)
@@ -203,6 +237,64 @@ const triggerFileSelect = () => {
   fileInputRef.value?.click()
 }
 
+const fetchActiveSession = async () => {
+  let data
+  try {
+    const response = await request.get('/attendance/session/active')
+    data = response.data
+  } catch {
+    return
+  }
+
+  const previousSessionId = activeSession.value?.session_id || null
+  activeSession.value = data.data
+
+  const currentSessionId = activeSession.value?.session_id || null
+  if (previousSessionId !== currentSessionId) {
+    livenessDismissed.value = false
+    challenge.value = null
+    showFaceMesh.value = false
+    faceMeshState.value = 'idle'
+  }
+
+  if (!canUseLiveness.value) {
+    challenge.value = null
+    showFaceMesh.value = false
+    return
+  }
+
+  if (!challenge.value && !livenessDismissed.value) {
+    await fetchChallenge()
+  }
+}
+
+const publishAttendanceSession = async () => {
+  sessionLoading.value = true
+  try {
+    const { data } = await request.post('/attendance/session/publish', {
+      title: sessionForm.title,
+    })
+    activeSession.value = data.data
+    ElMessage.success('签到已发布')
+  } finally {
+    sessionLoading.value = false
+  }
+}
+
+const closeAttendanceSession = async () => {
+  sessionLoading.value = true
+  try {
+    await request.post('/attendance/session/close')
+    activeSession.value = null
+    challenge.value = null
+    showFaceMesh.value = false
+    livenessDismissed.value = false
+    ElMessage.success('签到已结束')
+  } finally {
+    sessionLoading.value = false
+  }
+}
+
 // 获取动作挑战
 const fetchChallenge = async () => {
   try {
@@ -230,6 +322,7 @@ const skipFaceMeshVerify = () => {
   actionError.value = null
   faceMeshState.value = 'skipped'
   showFaceMesh.value = false
+  livenessDismissed.value = true
   ElMessage.info('已跳过动作验证，请使用摄像头拍照考勤')
 }
 
@@ -258,12 +351,18 @@ const onFaceMeshVerified = async (result) => {
       })
       ElMessage.success('活体验证通过，考勤提交成功')
     } catch (error) {
-      ElMessage.error(error.response?.data?.detail || '考勤提交失败')
+      const message = error.response?.data?.detail || '考勤提交失败'
+      actionError.value = message
+      faceMeshState.value = 'failed'
+      showFaceMesh.value = true
+      isVerifying.value = false
+      ElMessage.error(message)
     }
   } else {
     faceMeshState.value = 'failed'
     actionError.value = result.meta?.reason || '验证未通过，请重试'
-    showFaceMesh.value = false
+    showFaceMesh.value = true
+    isVerifying.value = false
   }
 }
 
@@ -276,7 +375,7 @@ const onFaceMeshProgress = (progress) => {
 const onFaceMeshError = (error) => {
   isVerifying.value = false
   actionError.value = error.message || '检测过程出错'
-  showFaceMesh.value = false
+  showFaceMesh.value = true
   faceMeshState.value = 'error'
 }
 
@@ -360,7 +459,14 @@ const exportRecords = async () => {
 
 onMounted(() => {
   fetchRecords()
-  fetchChallenge()
+  fetchActiveSession()
+  sessionPollTimer = window.setInterval(fetchActiveSession, 15000)
+})
+
+onBeforeUnmount(() => {
+  if (sessionPollTimer) {
+    window.clearInterval(sessionPollTimer)
+  }
 })
 </script>
 
@@ -381,6 +487,21 @@ onMounted(() => {
 
 .hidden-input {
   display: none;
+}
+
+.session-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.session-panel :deep(.el-alert) {
+  flex: 1;
+}
+
+.session-title-input {
+  max-width: 260px;
 }
 
 .result-box {
@@ -410,12 +531,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-.challenge-desc {
-  display: flex;
-  justify-content: center;
-  padding: 12px 0;
 }
 
 .challenge-actions {

@@ -55,6 +55,10 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         if bound_user:
             raise HTTPException(status_code=400, detail="该学生已绑定账号")
         student_id = student.student_id
+    else:
+        teacher_no = (payload.teacher_no or "").strip()
+        if not teacher_no:
+            raise HTTPException(status_code=400, detail="教师注册必须填写工号")
 
     user = User(
         username=username,

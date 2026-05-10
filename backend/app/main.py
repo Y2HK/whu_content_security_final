@@ -7,6 +7,7 @@ from app.db.database import SessionLocal
 from app.db.init_db import init_database
 from app.routers import attendance, auth, emotion, group, students
 from app.services.face_service import load_gallery_from_db
+from app.services.face_data_importer import import_face_data_on_startup
 
 
 @asynccontextmanager
@@ -14,6 +15,7 @@ async def lifespan(app: FastAPI):
     init_database()
     db = SessionLocal()
     try:
+        import_face_data_on_startup(db)
         load_gallery_from_db(db)
     finally:
         db.close()

@@ -11,7 +11,7 @@
         </el-form-item>
         <el-form-item>
           <input ref="fileInputRef" type="file" accept="image/*" class="hidden-input" @change="handleUpload" />
-          <el-button type="primary" @click="triggerFileSelect">上传合照并识别</el-button>
+          <el-button type="primary" :loading="uploading" @click="triggerFileSelect">上传合照并识别</el-button>
         </el-form-item>
       </el-form>
       <el-alert
@@ -24,8 +24,8 @@
       <el-descriptions v-if="latestActivity" title="最近一次识别结果" :column="2" border>
         <el-descriptions-item label="活动名称">{{ latestActivity.activity_name }}</el-descriptions-item>
         <el-descriptions-item label="日期">{{ latestActivity.event_date }}</el-descriptions-item>
-        <el-descriptions-item label="参与人数">{{ latestActivity.participant_count }}</el-descriptions-item>
-        <el-descriptions-item label="活动ID">{{ latestActivity.activity_id }}</el-descriptions-item>
+        <el-descriptions-item v-if="isTeacher" label="参与人数">{{ latestActivity.participant_count }}</el-descriptions-item>
+        <el-descriptions-item v-if="isTeacher" label="活动ID">{{ latestActivity.activity_id }}</el-descriptions-item>
       </el-descriptions>
 
       <el-table v-if="latestActivity" :data="latestActivity.participants" border class="mt16">
@@ -41,7 +41,7 @@
       <el-table :data="activities" v-loading="loading" border>
         <el-table-column prop="activity_name" label="活动名称" />
         <el-table-column prop="event_date" label="日期" />
-        <el-table-column prop="participant_count" label="参与人数" />
+        <el-table-column v-if="isTeacher" prop="participant_count" label="参与人数" />
         <el-table-column label="操作" width="120">
           <template #default="scope">
             <el-button size="small" @click="fetchActivityDetail(scope.row.activity_id)">查看</el-button>
@@ -62,6 +62,7 @@ import { useAuthStore } from '../stores/auth'
 const authStore = useAuthStore()
 const isTeacher = computed(() => authStore.user?.role === 'teacher')
 const loading = ref(false)
+const uploading = ref(false)
 const activities = ref([])
 const latestActivity = ref(null)
 const fileInputRef = ref(null)
@@ -71,6 +72,7 @@ const form = reactive({
 })
 
 const triggerFileSelect = () => {
+  if (uploading.value) return
   if (!form.activity_name || !form.event_date) {
     ElMessage.warning('请先填写活动名称和日期')
     return
@@ -87,14 +89,20 @@ const handleUpload = async (event) => {
   formData.append('event_date', form.event_date)
   formData.append('file', file)
 
+  uploading.value = true
   try {
-    const { data } = await request.post('/group/upload', formData)
+    const { data } = await request.post('/group/upload', formData, { timeout: 180000 })
     latestActivity.value = data.data
-    ElMessage.success('识别完成')
+    ElMessage.success(`识别完成，共识别 ${data.data.participant_count} 人`)
     await fetchActivities()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '识别失败')
+    const message =
+      error.code === 'ECONNABORTED'
+        ? '识别仍在处理中，请稍后刷新活动列表查看结果'
+        : error.response?.data?.detail || '识别失败'
+    ElMessage.error(message)
   } finally {
+    uploading.value = false
     event.target.value = ''
   }
 }

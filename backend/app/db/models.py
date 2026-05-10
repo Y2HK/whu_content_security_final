@@ -49,6 +49,18 @@ class Attendance(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class AttendanceSession(Base):
+    __tablename__ = "attendance_session"
+
+    session_id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(100), nullable=False)
+    description = Column(String(255), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_by = Column(Integer, ForeignKey("user.user_id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class Activity(Base):
     __tablename__ = "activity"
 

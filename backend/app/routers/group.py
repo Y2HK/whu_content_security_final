@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.dependencies import get_current_user, require_teacher
 from app.db.database import get_db
-from app.db.models import Activity, ActivityParticipant, Student, User
-from app.services.emotion_service import analyze_image_emotions
-from app.services.face_service import recognize_group, save_upload_file
+from app.db.models import Activity, ActivityParticipant, Attendance, Student, User
+from app.services.emotion_service import analyze_image_emotion
+from app.services.face_service import recognize_group_detailed, save_upload_file
 
 router = APIRouter()
 
@@ -39,11 +39,15 @@ async def upload_group_photo(
     db.commit()
     db.refresh(activity)
 
-    matches = recognize_group(students, str(destination))
-    emotion_predictions = analyze_image_emotions(destination, count=len(matches), fallback_seed=activity_name)
+    matches = recognize_group_detailed(students, str(destination))
     participants = []
-    for index, (student, confidence) in enumerate(matches):
-        emotion_prediction = emotion_predictions[index]
+    for match in matches:
+        student = match.student
+        confidence = match.confidence
+        emotion_prediction = analyze_image_emotion(
+            match.face_crop,
+            fallback_seed=f"{activity_name}-{student.student_id}",
+        )
         emotion = emotion_prediction.emotion
         db.add(ActivityParticipant(activity_id=activity.activity_id, student_id=student.student_id, confidence=confidence, emotion=emotion))
         participants.append({
@@ -54,6 +58,8 @@ async def upload_group_photo(
             "emotion": emotion,
             "emotion_confidence": emotion_prediction.confidence,
             "emotion_source": emotion_prediction.source,
+            "raw_emotion": emotion_prediction.raw_emotion,
+            "emotion_scores": emotion_prediction.scores,
         })
 
     activity.participant_count = len(participants)
@@ -80,16 +86,18 @@ def list_activities(db: Session = Depends(get_db), user: User = Depends(get_curr
         )
 
     activities = query.order_by(Activity.activity_id.desc()).all()
-    return success([
-        {
+    data = []
+    for item in activities:
+        row = {
             "activity_id": item.activity_id,
             "activity_name": item.activity_name,
             "event_date": item.event_date,
-            "participant_count": item.participant_count,
             "created_at": item.created_at,
         }
-        for item in activities
-    ])
+        if user.role == "teacher":
+            row["participant_count"] = item.participant_count
+        data.append(row)
+    return success(data)
 
 
 @router.get("/activities/{activity_id}")
@@ -122,13 +130,15 @@ def activity_detail(activity_id: int, db: Session = Depends(get_db), user: User 
         }
         for participant, student in rows
     ]
-    return success({
+    data = {
         "activity_id": activity.activity_id,
         "activity_name": activity.activity_name,
         "event_date": activity.event_date,
-        "participant_count": activity.participant_count,
         "participants": participants,
-    })
+    }
+    if user.role == "teacher":
+        data["participant_count"] = activity.participant_count
+    return success(data)
 
 
 @router.get("/statistics")
@@ -142,11 +152,27 @@ def activity_statistics(db: Session = Depends(get_db), user: User = Depends(get_
     students = query.order_by(Student.student_id.asc()).all()
     data = []
     for student in students:
-        count = db.query(ActivityParticipant).filter(ActivityParticipant.student_id == student.student_id).count()
+        group_photo_count = (
+            db.query(ActivityParticipant)
+            .filter(ActivityParticipant.student_id == student.student_id)
+            .count()
+        )
+        live_attendance_count = (
+            db.query(Attendance)
+            .filter(
+                Attendance.student_id == student.student_id,
+                Attendance.status == "success",
+                Attendance.is_live.is_(True),
+            )
+            .count()
+        )
+        count = group_photo_count + live_attendance_count
         data.append({
             "student_id": student.student_id,
             "student_no": student.student_no,
             "name": student.name,
             "activity_count": count,
+            "group_photo_count": group_photo_count,
+            "live_attendance_count": live_attendance_count,
         })
     return success(data)
