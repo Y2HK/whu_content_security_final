@@ -39,6 +39,14 @@ const statusText = computed(() => {
 
 const startCamera = async () => {
   try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      const msg = isLocalhost
+        ? '当前浏览器不支持摄像头访问，请使用现代浏览器（Chrome/Firefox/Edge）'
+        : '摄像头访问需要安全上下文（HTTPS 或 localhost）。当前通过 IP 访问，请切换到 localhost 或配置 HTTPS。'
+      alert(msg)
+      throw new Error(msg)
+    }
     mediaStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
     if (videoRef.value) {
       videoRef.value.srcObject = mediaStream.value
@@ -49,6 +57,7 @@ const startCamera = async () => {
   } catch (error) {
     status.value = 'error'
     emit('status', status.value)
+    console.error('[Camera] Failed to start camera:', error)
     throw error
   }
 }
